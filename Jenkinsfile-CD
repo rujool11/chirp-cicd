@@ -1,0 +1,67 @@
+pipeline {
+  agent any
+
+  parameters {
+    string(name: 'SERVICE_DEPLOYED', defaultValue: '', description: 'service name that was just built')
+    string(name: 'SERVICE_VERSION', defaultValue: '', description: 'version tag of the built service')
+  }
+
+  environment {
+    K8S_REPO = 'chirp-cicd' 
+    MINIKUBE_IP = ''      
+  }
+
+  stages {
+
+    stage('clone cicd repo') {
+      steps {
+        script {
+          withCredentials([string(credentialsId: 'git-token', variable: 'GITHUB_TOKEN')]) {
+            // remove existing folder to force fresh clone
+            sh "rm -rf ${K8S_REPO}"
+            sh "git clone https://${GITHUB_TOKEN}@github.com/rujool11/chirp-cicd.git ${K8S_REPO}"
+          }
+        }
+      }
+    }
+
+    stage('apply k8s manifests') {
+      steps {
+        script {
+          // apply all manifests inside k8s folder
+          sh "kubectl apply -f ${K8S_REPO}/k8s"
+
+          // wait for all deployments to be ready
+          def services = ['auth-service', 'core-service', 'api-gateway']
+          for (svc in services) {
+            sh "kubectl rollout status deployment/${svc} --timeout=120s"
+          }
+
+          // get minikube ip
+          env.MINIKUBE_IP = sh(script: "minikube ip", returnStdout: true).trim()
+        }
+      }
+    }
+
+    stage('print service urls') {
+      steps {
+        script {
+          def svc_ports = ['auth-service': 30001, 'core-service': 30002, 'api-gateway': 30000]
+          echo "services are deployed and accessible at:"
+          for (svc in svc_ports.keySet()) {
+            echo "${svc} -> http://${env.MINIKUBE_IP}:${svc_ports[svc]}"
+          }
+        }
+      }
+    }
+  }
+
+  post {
+    failure {
+      echo "cd pipeline failed"
+    }
+    success {
+      echo "cd pipeline completed successfully"
+    }
+  }
+}
