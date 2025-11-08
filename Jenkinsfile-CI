@@ -61,7 +61,7 @@ pipeline {
         script {
           // extract current version from cicd repo manifest
           dir('../chirp-cicd') {
-            withCredentials([string(credentialsId: 'github-pat', variable: 'GITHUB_TOKEN')]) {
+            withCredentials([string(credentialsId: 'git-token', variable: 'GITHUB_TOKEN')]) {
               sh """
                 if [ ! -d .git ]; then
                   git clone https://${GITHUB_TOKEN}@github.com/rujool11/chirp-cicd.git .
@@ -106,7 +106,7 @@ pipeline {
 
           // commit and push updated manifest
           dir('../chirp-cicd') {
-            withCredentials([string(credentialsId: 'github-pat', variable: 'GITHUB_TOKEN')]) {
+            withCredentials([string(credentialsId: 'git-token', variable: 'GITHUB_TOKEN')]) {
               sh """
                 git config --global user.email "jenkins@chirp.local"
                 git config --global user.name "jenkins ci"
