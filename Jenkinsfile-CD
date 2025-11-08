@@ -1,14 +1,9 @@
 pipeline {
   agent any
 
-  parameters {
-    string(name: 'SERVICE_DEPLOYED', defaultValue: '', description: 'service name that was just built')
-    string(name: 'SERVICE_VERSION', defaultValue: '', description: 'version tag of the built service')
-  }
-
   environment {
-    K8S_REPO = 'chirp-cicd' 
-    MINIKUBE_IP = ''      
+    K8S_REPO = 'chirp-cicd'  // folder to clone cicd repo into
+    MINIKUBE_IP = ''          
   }
 
   stages {
@@ -25,7 +20,7 @@ pipeline {
       }
     }
 
-    stage('apply k8s manifests') {
+    stage('apply all k8s manifests') {
       steps {
         script {
           // apply all manifests inside k8s folder
@@ -46,6 +41,7 @@ pipeline {
     stage('print service urls') {
       steps {
         script {
+          // map service to nodeport (from your manifests)
           def svc_ports = ['auth-service': 30001, 'core-service': 30002, 'api-gateway': 30000]
           echo "services are deployed and accessible at:"
           for (svc in svc_ports.keySet()) {
