@@ -84,7 +84,7 @@ pipeline {
           // commit and push version bump
           sh """
             cd ../chirp-k8s && git add k8s/${params.SERVICE_NAME}.yaml && \
-            git commit -m "Bump ${params.SERVICE_NAME} to ${newVersion}" && \
+            git commit -m "CI: Bump ${params.SERVICE_NAME} to ${newVersion}" && \
             git push
           """
         }
