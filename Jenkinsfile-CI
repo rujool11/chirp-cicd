@@ -1,0 +1,102 @@
+pipeline {
+  agent any
+
+  parameters {
+    string(name: 'SERVICE_REPO', defaultValue: '', description: 'Git repo of the microservice (e.g., https://github.com/user/chirp-auth-service.git)')
+    choice(name: 'SERVICE_NAME', choices: ['auth-service', 'core-service', 'api-gateway'], description: 'Service to build')
+  }
+
+  environment {
+    REGISTRY = "rujool11"
+  }
+
+  stages {
+    stage('Clone Repo') {
+      steps {
+        git branch: 'main', url: "${params.SERVICE_REPO}"
+      }
+    }
+
+    stage('Inject Environment Variables') {
+      steps {
+        script {
+          if (params.SERVICE_NAME == 'auth-service') {
+            withCredentials([
+              string(credentialsId: 'DB_CONNECTION_STRING', variable: 'DB_STRING'),
+              string(credentialsId: 'JWT_SECRET', variable: 'JWT')
+            ]) {
+              writeFile file: '.env', text: """
+              DB_CONNECTION_STRING=${DB_STRING}
+              JWT_SECRET=${JWT}
+              PORT=8001
+              """
+            }
+          } else if (params.SERVICE_NAME == 'core-service') {
+            withCredentials([
+              string(credentialsId: 'DB_CONNECTION_STRING', variable: 'DB_STRING'),
+              string(credentialsId: 'JWT_SECRET', variable: 'JWT')
+            ]) {
+              writeFile file: '.env', text: """
+              DB_CONNECTION_STRING=${DB_STRING}
+              JWT_SECRET=${JWT}
+              PORT=8002
+              """
+            }
+          } else if (params.SERVICE_NAME == 'api-gateway') {
+            withCredentials([
+              string(credentialsId: 'AUTH_URL', variable: 'AUTH_URL'),
+              string(credentialsId: 'CORE_URL', variable: 'CORE_URL')
+            ]) {
+              writeFile file: '.env', text: """
+              AUTH_URL=${AUTH_URL}
+              CORE_URL=${CORE_URL}
+              PORT=8000
+              """
+            }
+          }
+        }
+      }
+    }
+
+    stage('Build Docker Image') {
+      steps {
+        script {
+          // get current version tag from manifest
+          def currentVersion = sh(script: "grep 'image:' k8s/${params.SERVICE_NAME}.yaml | awk -F: '{print \$3}'", returnStdout: true).trim()
+          if (!currentVersion) currentVersion = "v0.0"
+
+          def versionParts = currentVersion.replace('v', '').tokenize('.')
+          def newVersion = "v${versionParts[0]}.${versionParts[1].toInteger() + 1}"
+
+          echo "Building ${params.SERVICE_NAME} -> ${REGISTRY}/${params.SERVICE_NAME}:${newVersion}"
+
+          // build and push image
+          sh """
+            docker build -t ${REGISTRY}/${params.SERVICE_NAME}:${newVersion} .
+            docker push ${REGISTRY}/${params.SERVICE_NAME}:${newVersion}
+          """
+
+          // update manifest version
+          sh """
+            sed -i 's|${REGISTRY}/${params.SERVICE_NAME}:.*|${REGISTRY}/${params.SERVICE_NAME}:${newVersion}|' ../chirp-k8s/k8s/${params.SERVICE_NAME}.yaml
+          """
+
+          // commit and push version bump
+          sh """
+            cd ../chirp-k8s && git add k8s/${params.SERVICE_NAME}.yaml && \
+            git commit -m "Bump ${params.SERVICE_NAME} to ${newVersion}" && \
+            git push
+          """
+        }
+      }
+    }
+
+    stage('Trigger CD Pipeline') {
+      steps {
+        build job: 'Chirp-CD', parameters: [
+          string(name: 'SERVICE_DEPLOYED', value: "${params.SERVICE_NAME}")
+        ]
+      }
+    }
+  }
+}
