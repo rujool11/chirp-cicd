@@ -2,8 +2,8 @@ pipeline {
   agent any
 
   parameters {
-    string(name: 'SERVICE_REPO', defaultValue: '', description: 'Git repo of the microservice (e.g., https://github.com/user/chirp-auth-service.git)')
-    choice(name: 'SERVICE_NAME', choices: ['auth-service', 'core-service', 'api-gateway'], description: 'Service to build')
+    string(name: 'SERVICE_REPO', defaultValue: '', description: 'git repo of the microservice (e.g., https://github.com/rujool11/chirp-auth-service.git)')
+    choice(name: 'SERVICE_NAME', choices: ['auth-service', 'core-service', 'api-gateway'], description: 'service to build')
   }
 
   environment {
@@ -11,13 +11,14 @@ pipeline {
   }
 
   stages {
-    stage('Clone Repo') {
+
+    stage('clone microservice repo') {
       steps {
         git branch: 'main', url: "${params.SERVICE_REPO}"
       }
     }
 
-    stage('Inject Environment Variables') {
+    stage('inject environment variables') {
       steps {
         script {
           if (params.SERVICE_NAME == 'auth-service') {
@@ -25,78 +26,109 @@ pipeline {
               string(credentialsId: 'DB_CONNECTION_STRING', variable: 'DB_STRING'),
               string(credentialsId: 'JWT_SECRET', variable: 'JWT')
             ]) {
-              writeFile file: '.env', text: """
-              DB_CONNECTION_STRING=${DB_STRING}
-              JWT_SECRET=${JWT}
-              PORT=8001
-              """
+              writeFile file: '.env', text: """DB_CONNECTION_STRING=${DB_STRING}
+                                            JWT_SECRET=${JWT}
+                                            PORT=8001
+                                            """
             }
           } else if (params.SERVICE_NAME == 'core-service') {
             withCredentials([
               string(credentialsId: 'DB_CONNECTION_STRING', variable: 'DB_STRING'),
               string(credentialsId: 'JWT_SECRET', variable: 'JWT')
             ]) {
-              writeFile file: '.env', text: """
-              DB_CONNECTION_STRING=${DB_STRING}
-              JWT_SECRET=${JWT}
-              PORT=8002
-              """
+              writeFile file: '.env', text: """DB_CONNECTION_STRING=${DB_STRING}
+                                            JWT_SECRET=${JWT}
+                                            PORT=8002
+                                            """
             }
           } else if (params.SERVICE_NAME == 'api-gateway') {
             withCredentials([
               string(credentialsId: 'AUTH_URL', variable: 'AUTH_URL'),
               string(credentialsId: 'CORE_URL', variable: 'CORE_URL')
             ]) {
-              writeFile file: '.env', text: """
-              AUTH_URL=${AUTH_URL}
-              CORE_URL=${CORE_URL}
-              PORT=8000
-              """
+              writeFile file: '.env', text: """AUTH_URL=${AUTH_URL}
+                                            CORE_URL=${CORE_URL}
+                                            PORT=8000
+                                            """
             }
           }
         }
       }
     }
 
-    stage('Build Docker Image') {
+    stage('build and push docker image') {
       steps {
         script {
-          // get current version tag from manifest
-          def currentVersion = sh(script: "grep 'image:' k8s/${params.SERVICE_NAME}.yaml | awk -F: '{print \$3}'", returnStdout: true).trim()
-          if (!currentVersion) currentVersion = "v0.0"
+          // get current version (e.g. v0.3) from k8s manifest
+          def currentVersion = sh(script: "grep 'image:' k8s/${params.SERVICE_NAME}.yaml | sed -E 's/.*:(v0\\.)([0-9]+)/\\2/'", returnStdout: true).trim()
+          if (!currentVersion) {
+            currentVersion = "0"
+          }
 
-          def versionParts = currentVersion.replace('v', '').tokenize('.')
-          def newVersion = "v${versionParts[0]}.${versionParts[1].toInteger() + 1}"
+          // bump version by 1 (v0.x → v0.(x+1))
+          def newMinor = (currentVersion.toInteger() + 1)
+          def newVersion = "v0.${newMinor}"
 
-          echo "Building ${params.SERVICE_NAME} -> ${REGISTRY}/${params.SERVICE_NAME}:${newVersion}"
+          echo "building ${params.SERVICE_NAME} -> ${REGISTRY}/${params.SERVICE_NAME}:${newVersion}"
 
-          // build and push image
+          // build and push docker image
           sh """
             docker build -t ${REGISTRY}/${params.SERVICE_NAME}:${newVersion} .
             docker push ${REGISTRY}/${params.SERVICE_NAME}:${newVersion}
           """
 
-          // update manifest version
+          // clone cicd repo
+          dir('../chirp-cicd') {
+            withCredentials([string(credentialsId: 'github-pat', variable: 'GITHUB_TOKEN')]) {
+              sh """
+                if [ ! -d .git ]; then
+                  git clone https://${GITHUB_TOKEN}@github.com/rujool11/chirp-cicd.git .
+                fi
+              """
+            }
+          }
+
+          // update the image version in the manifest
           sh """
-            sed -i 's|${REGISTRY}/${params.SERVICE_NAME}:.*|${REGISTRY}/${params.SERVICE_NAME}:${newVersion}|' ../chirp-k8s/k8s/${params.SERVICE_NAME}.yaml
+            sed -i 's|${REGISTRY}/${params.SERVICE_NAME}:.*|${REGISTRY}/${params.SERVICE_NAME}:${newVersion}|' ../chirp-cicd/k8s/${params.SERVICE_NAME}.yaml
           """
 
-          // commit and push version bump
-          sh """
-            cd ../chirp-k8s && git add k8s/${params.SERVICE_NAME}.yaml && \
-            git commit -m "CI: Bump ${params.SERVICE_NAME} to ${newVersion}" && \
-            git push
-          """
+          // commit and push updated manifest
+          dir('../chirp-cicd') {
+            withCredentials([string(credentialsId: 'github-pat', variable: 'GITHUB_TOKEN')]) {
+              sh """
+                git config --global user.email "jenkins@chirp.local"
+                git config --global user.name "jenkins ci"
+                git add k8s/${params.SERVICE_NAME}.yaml
+                git commit -m "ci: bump ${params.SERVICE_NAME} to ${newVersion}" || echo "no changes to commit"
+                git push origin main
+              """
+            }
+          }
+
+          // save the new version for next stage
+          env.NEW_VERSION = newVersion
         }
       }
     }
 
-    stage('Trigger CD Pipeline') {
+    stage('trigger cd pipeline') {
       steps {
+        echo "triggering cd deployment for ${params.SERVICE_NAME}:${env.NEW_VERSION}"
         build job: 'Chirp-CD', parameters: [
-          string(name: 'SERVICE_DEPLOYED', value: "${params.SERVICE_NAME}")
+          string(name: 'SERVICE_DEPLOYED', value: "${params.SERVICE_NAME}"),
+          string(name: 'SERVICE_VERSION', value: "${env.NEW_VERSION}")
         ]
       }
+    }
+  }
+
+  post {
+    failure {
+      echo "ci pipeline failed for ${params.SERVICE_NAME}"
+    }
+    success {
+      echo "ci pipeline completed successfully for ${params.SERVICE_NAME}:${env.NEW_VERSION}"
     }
   }
 }
