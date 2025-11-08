@@ -60,7 +60,7 @@ pipeline {
       steps {
         script {
           // get current version (e.g. v0.3) from k8s manifest
-          def currentVersion = sh(script: "grep 'image:' k8s/${params.SERVICE_NAME}.yaml | sed -E 's/.*:(v0\\.)([0-9]+)/\\2/'", returnStdout: true).trim()
+          def currentVersion = sh(script: "grep 'image:' k8s/${params.SERVICE_NAME}-deployment.yaml | sed -E 's/.*:(v0\\.)([0-9]+)/\\2/'", returnStdout: true).trim()
           if (!currentVersion) {
             currentVersion = "0"
           }
