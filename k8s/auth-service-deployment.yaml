@@ -14,7 +14,7 @@ spec:
     spec:
       containers:
         - name: auth-service
-          image: rujool11/auth-service:v0.0   
+          image: rujool11/auth-service:v0.1
           ports:
             - containerPort: 8001
 ---
