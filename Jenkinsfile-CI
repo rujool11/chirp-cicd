@@ -110,6 +110,7 @@ pipeline {
               sh """
                 git config --global user.email "jenkins@chirp.local"
                 git config --global user.name "jenkins ci"
+                git pull --rebase origin main
                 git add k8s/${params.SERVICE_NAME}-deployment.yaml
                 git commit -m "ci: bump ${params.SERVICE_NAME} to ${env.NEW_VERSION}" || echo "no changes to commit"
                 git push origin main
